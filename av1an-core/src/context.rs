@@ -22,7 +22,7 @@ use av_decoders::VapoursynthDecoder;
 use colored::*;
 use itertools::Itertools;
 use num_traits::cast::ToPrimitive;
-use rand::{prelude::SliceRandom, rng};
+use rand::{prelude::SliceRandom, rng, Rng, RngExt};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -72,6 +72,72 @@ pub struct Av1anContext {
     pub vs_proxy_script:      Option<PathBuf>,
     pub args:                 EncodeArgs,
     pub(crate) scene_factory: SceneFactory,
+}
+
+fn estimated_workers_for_chunk_order(args: &EncodeArgs) -> usize {
+    if args.workers > 0 {
+        return args.workers;
+    }
+
+    determine_workers(args)
+        .ok()
+        .and_then(|workers| usize::try_from(workers).ok())
+        .filter(|&workers| workers > 0)
+        .unwrap_or(1)
+}
+
+fn rebalance_long_tail_chunks(chunks: &mut [Chunk], workers: usize) {
+    if chunks.len() < 2 {
+        return;
+    }
+
+    let min_frames = chunks.iter().map(Chunk::frames).min().unwrap_or(0);
+    let max_tail_frames = min_frames.saturating_mul(3);
+    let tail_len = ((chunks.len() + 9) / 10).max(workers.saturating_mul(2)).min(chunks.len());
+
+    if tail_len >= chunks.len() {
+        return;
+    }
+
+    let tail_start = chunks.len() - tail_len;
+    let mut safe_prefix_indices: Vec<usize> = chunks[..tail_start]
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, chunk)| (chunk.frames() <= max_tail_frames).then_some(idx))
+        .collect();
+
+    for tail_idx in (tail_start..chunks.len()).rev() {
+        if chunks[tail_idx].frames() > max_tail_frames {
+            let Some(prefix_idx) = safe_prefix_indices.pop() else {
+                break;
+            };
+            chunks.swap(tail_idx, prefix_idx);
+        }
+    }
+}
+
+fn apply_long_biased_random_chunk_order<R: Rng + ?Sized>(
+    chunks: &mut Vec<Chunk>,
+    workers: usize,
+    rng: &mut R,
+) {
+    if chunks.len() < workers.saturating_mul(3).max(6) {
+        chunks.shuffle(rng);
+        return;
+    }
+
+    chunks.sort_unstable_by_key(|chunk| Reverse(chunk.frames()));
+
+    let window_len = ((chunks.len().saturating_mul(2) + 4) / 5).clamp(2, chunks.len());
+    for start in 0..chunks.len() {
+        let end = (start + window_len).min(chunks.len());
+        if end - start > 1 {
+            let random_idx = rng.random_range(start..end);
+            chunks.swap(start, random_idx);
+        }
+    }
+
+    rebalance_long_tail_chunks(chunks, workers);
 }
 
 impl Av1anContext {
@@ -539,16 +605,23 @@ impl Av1anContext {
         let video_params = chunk.video_params.clone();
 
         let mut enc_cmd = if chunk.passes == 1 {
-            chunk.encoder.compose_1_1_pass(video_params, chunk.output())
+            chunk.encoder.compose_1_1_pass(
+                video_params,
+                chunk.output(),
+                self.args.encoder_path.as_deref(),
+            )
         } else if current_pass == 1 {
-            chunk
-                .encoder
-                .compose_1_2_pass(video_params, fpf_file.to_string_lossy().as_ref())
+            chunk.encoder.compose_1_2_pass(
+                video_params,
+                fpf_file.to_string_lossy().as_ref(),
+                self.args.encoder_path.as_deref(),
+            )
         } else {
             chunk.encoder.compose_2_2_pass(
                 video_params,
                 fpf_file.to_string_lossy().as_ref(),
                 chunk.output(),
+                self.args.encoder_path.as_deref(),
             )
         };
 
@@ -888,6 +961,11 @@ impl Av1anContext {
             },
             ChunkOrdering::Random => {
                 chunks.shuffle(&mut rng());
+            },
+            ChunkOrdering::LongBiasedRandom => {
+                let workers = estimated_workers_for_chunk_order(&self.args);
+                let mut random = rng();
+                apply_long_biased_random_chunk_order(&mut chunks, workers, &mut random);
             },
         }
 
@@ -1372,5 +1450,87 @@ impl Av1anContext {
             save_chunk_queue(&self.args.temp, &chunks)?;
             Ok((chunks, num_chunks))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use rand::{prelude::SliceRandom, rngs::StdRng, SeedableRng};
+
+    use super::{apply_long_biased_random_chunk_order, rebalance_long_tail_chunks};
+    use crate::{
+        chunk::Chunk,
+        encoder::Encoder,
+        vapoursynth::CacheSource,
+        ChunkMethod,
+        Input,
+        TargetQuality,
+    };
+
+    fn test_chunk(index: usize, frames: usize) -> Chunk {
+        Chunk {
+            temp: String::new(),
+            index,
+            input: Input::Video {
+                path:         PathBuf::new(),
+                temp:         String::new(),
+                chunk_method: ChunkMethod::LSMASH,
+                is_proxy:     false,
+                cache_mode:   CacheSource::SOURCE,
+            },
+            proxy: None,
+            source_cmd: vec!["".into()],
+            proxy_cmd: None,
+            output_ext: "ivf".to_owned(),
+            start_frame: 0,
+            end_frame: frames,
+            frame_rate: 24.0,
+            passes: 1,
+            video_params: vec![],
+            encoder: Encoder::svt_av1,
+            noise_size: (None, None),
+            target_quality: TargetQuality::default("", Encoder::svt_av1),
+            tq_cq: None,
+            ignore_frame_mismatch: false,
+        }
+    }
+
+    #[test]
+    fn long_biased_random_falls_back_to_random_for_small_queues() {
+        let base_chunks: Vec<Chunk> = [10, 20, 30, 40, 50]
+            .into_iter()
+            .enumerate()
+            .map(|(index, frames)| test_chunk(index, frames))
+            .collect();
+
+        let mut actual = base_chunks.clone();
+        let mut expected = base_chunks;
+        let mut actual_rng = StdRng::seed_from_u64(7);
+        let mut expected_rng = StdRng::seed_from_u64(7);
+
+        apply_long_biased_random_chunk_order(&mut actual, 2, &mut actual_rng);
+        expected.shuffle(&mut expected_rng);
+
+        let actual_order: Vec<usize> = actual.iter().map(Chunk::frames).collect();
+        let expected_order: Vec<usize> = expected.iter().map(Chunk::frames).collect();
+        assert_eq!(actual_order, expected_order);
+    }
+
+    #[test]
+    fn rebalance_long_tail_chunks_moves_oversized_tail_chunks_forward_when_possible() {
+        let mut chunks: Vec<Chunk> = [90, 80, 70, 10, 9, 8, 7, 6, 5, 40]
+            .into_iter()
+            .enumerate()
+            .map(|(index, frames)| test_chunk(index, frames))
+            .collect();
+
+        rebalance_long_tail_chunks(&mut chunks, 2);
+
+        let tail_frames: Vec<usize> =
+            chunks.iter().skip(chunks.len() - 4).map(Chunk::frames).collect();
+        assert!(tail_frames.iter().all(|&frames| frames <= 15));
+        assert!(chunks[..chunks.len() - 4].iter().any(|chunk| chunk.frames() == 40));
     }
 }

@@ -40,6 +40,7 @@ fn get_test_args() -> Av1anContext {
         chunk_order:           ChunkOrdering::Random,
         concat:                ConcatMethod::FFmpeg,
         encoder:               Encoder::aom,
+        encoder_path:          None,
         extra_splits_len:      Some(100),
         photon_noise:          Some(10),
         photon_noise_size:     (None, None),

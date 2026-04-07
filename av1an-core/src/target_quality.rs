@@ -86,6 +86,7 @@ pub struct TargetQuality {
     pub max_q:                 u32,
     pub interp_method:         Option<(InterpolationMethod, InterpolationMethod)>,
     pub encoder:               Encoder,
+    pub encoder_path:          Option<String>,
     pub pix_format:            FFPixelFormat,
     pub temp:                  String,
     pub workers:               usize,
@@ -116,6 +117,7 @@ impl TargetQuality {
             max_q: encoder.get_default_cq_range().1 as u32,
             interp_method: None,
             encoder,
+            encoder_path: None,
             pix_format: FFPixelFormat::YUV420P10LE,
             temp: temp_dir.to_owned(),
             workers: 1,
@@ -160,7 +162,14 @@ impl TargetQuality {
         // Initialize quantizer limits from specified range or encoder defaults
         let step = match self.encoder {
             Encoder::x264 | Encoder::x265 => 0.25,
-            Encoder::svt_av1 if crate::encoder::svt_av1_supports_quarter_steps(&self.temp) => 0.25,
+            Encoder::svt_av1
+                if crate::encoder::svt_av1_supports_quarter_steps(
+                    &self.temp,
+                    self.encoder.resolved_bin(self.encoder_path.as_deref()).as_ref(),
+                ) =>
+            {
+                0.25
+            },
             _ => 1.0,
         };
         let mut lower_quantizer_limit = self.min_q as f32;
@@ -546,6 +555,7 @@ impl TargetQuality {
             self.probing_rate,
             vmaf_threads,
             self.video_params.clone(),
+            self.encoder_path.as_deref(),
         );
 
         let source_cmd = chunk.proxy_cmd.clone().unwrap_or_else(|| chunk.source_cmd.clone());

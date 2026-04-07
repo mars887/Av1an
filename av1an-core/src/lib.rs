@@ -505,6 +505,8 @@ pub enum ChunkOrdering {
     Sequential,
     #[strum(serialize = "random")]
     Random,
+    #[strum(serialize = "long-biased-random")]
+    LongBiasedRandom,
 }
 
 #[derive(

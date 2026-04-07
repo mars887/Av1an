@@ -29,6 +29,13 @@ Av1an is a command-line application that can run on Windows, Linux, and macOS. S
 
 For a complete reference, refer to our [documentation](https://rust-av.github.io/Av1an/) or run `av1an --help`.
 
+## Fork Additions
+
+This fork adds two encoding-specific changes:
+
+- `--encoder-path <EXE>` overrides the executable name or path used for the selected encoder. This is useful for custom builds such as `SvtAv1EncApp-SomeFork.exe`. If the executable cannot be found, av1an exits with a clear `PATH` error.
+- `--chunk-order long-biased-random` adds a semi-random queue that keeps a bias toward longer chunks. It starts from a long-to-short ordering, randomizes within a sliding window, and tries to keep oversized chunks out of the tail of the queue when possible.
+
 ### Examples
 
 Encode a video file with the default parameters:
@@ -43,6 +50,18 @@ Or use a VapourSynth script and custom parameters:
 av1an -i input.vpy -v "--cpu-used=3 --end-usage=q --cq-level=30 --threads=8" -w 10 --target-quality 95 -a "-c:a libopus -ac 2 -b:a 192k" -l my_log -o output.mkv
 ```
 
+Use a custom encoder executable name from `PATH`:
+
+```sh
+av1an -i input.mkv -o output.mkv -e svt-av1 --encoder-path SvtAv1EncApp-SomeFork.exe
+```
+
+Use the new chunk ordering mode:
+
+```sh
+av1an -i input.mkv -o output.mkv --chunk-order long-biased-random
+```
+
 ## Supported encoders
 
 At least one encoder is required to use Av1an. The following encoders are supported:
@@ -54,7 +73,7 @@ At least one encoder is required to use Av1an. The following encoders are suppor
 - [x264](https://www.videolan.org/developers/x264.html) (H.264/AVC)
 - [x265](https://www.videolan.org/developers/x265.html) (H.265/HEVC)
 
-Note that Av1an requires the executable encoder. If you use a package manager to install encoders, check that the installation includes an executable encoder (e.g. vpxenc, SvtAv1EncApp) from the list above. Just installing the library (e.g. libvpx, libSvtAv1Enc) is not enough.
+Note that Av1an requires the executable encoder. If you use a package manager to install encoders, check that the installation includes an executable encoder (e.g. vpxenc, SvtAv1EncApp) from the list above. Just installing the library (e.g. libvpx, libSvtAv1Enc) is not enough. This fork can also target alternate executable names or paths via `--encoder-path`.
 
 ## Installation
 

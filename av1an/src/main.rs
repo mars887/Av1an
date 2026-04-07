@@ -371,6 +371,18 @@ pub struct CliOpts {
     #[clap(short, long, default_value_t = Encoder::svt_av1, help_heading = "Encoding")]
     pub encoder: Encoder,
 
+    /// Override the encoder executable name or path
+    ///
+    /// By default, av1an uses the standard executable name for the selected
+    /// encoder (for example, `SvtAv1EncApp.exe` for `svt-av1` on Windows).
+    /// Use this option to run a differently named build or fork instead.
+    ///
+    /// Examples:
+    /// --encoder-path SvtAv1EncApp-SomeFork.exe
+    /// --encoder-path x265-main12.exe
+    #[clap(long, help_heading = "Encoding")]
+    pub encoder_path: Option<String>,
+
     /// Parameters for video encoder
     ///
     /// These parameters are for the encoder binary directly, so the ffmpeg
@@ -502,6 +514,12 @@ pub struct CliOpts {
     ///
     /// random - The chunks will be encoded in a random order. This will provide
     /// a more accurate estimated filesize sooner in the encode.
+    ///
+    /// long-biased-random - The chunks will be encoded in a semi-random order
+    /// with a bias toward longer chunks. This starts from long-to-short, then
+    /// randomizes within a sliding window so the queue stays varied without
+    /// pushing very long chunks to the very end unless the chunk distribution
+    /// makes that unavoidable.
     #[clap(long, default_value_t = ChunkOrdering::LongestFirst, help_heading = "Encoding")]
     pub chunk_order: ChunkOrdering,
 
@@ -879,6 +897,7 @@ impl CliOpts {
             max_q,
             metric: self.target_metric,
             encoder: self.encoder,
+            encoder_path: self.encoder_path.clone(),
             pix_format: output_pix_format,
             temp: temp_dir,
             workers: self.workers,
@@ -1128,6 +1147,7 @@ pub fn parse_cli(args: &CliOpts) -> anyhow::Result<Vec<EncodeArgs>> {
             chunk_order: args.chunk_order,
             concat: args.concat,
             encoder: args.encoder,
+            encoder_path: args.encoder_path.clone(),
             extra_splits_len: match args.extra_split {
                 Some(0) => None,
                 Some(x) => Some(x),

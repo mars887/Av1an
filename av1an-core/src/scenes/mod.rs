@@ -269,8 +269,9 @@ impl Scene {
 
         if !args.force {
             let help_text = {
-                let [cmd, arg] = encoder.help_command();
-                String::from_utf8_lossy(&Command::new(cmd).arg(arg).output()?.stdout).to_string()
+                let (cmd, arg) = encoder.help_command_with_bin(args.encoder_path.as_deref());
+                String::from_utf8_lossy(&Command::new(cmd.as_ref()).arg(arg).output()?.stdout)
+                    .to_string()
             };
             let valid_params = valid_params(&help_text, encoder);
             let interleaved_args: Vec<&str> = raw_zone_args

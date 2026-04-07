@@ -4,11 +4,12 @@ mod tests;
 use std::{
     borrow::Cow,
     cmp,
+    collections::HashMap,
     fmt::Display,
     iter::Iterator,
     path::PathBuf,
     process::Command,
-    sync::OnceLock,
+    sync::Mutex,
 };
 
 use arrayvec::ArrayVec;
@@ -17,37 +18,11 @@ use itertools::chain;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-static SVT_AV1_QUARTER_STEP_SUPPORT: OnceLock<bool> = OnceLock::new();
 
-pub static USE_OLD_SVT_AV1: Lazy<bool> = Lazy::new(|| {
-    let version = Command::new("SvtAv1EncApp")
-        .arg("--version")
-        .output()
-        .expect("failed to run svt-av1");
-
-    if let Some((major, minor, _)) = parse_svt_av1_version(&version.stdout) {
-        match major {
-            0 => minor < 9,
-            1.. => false,
-        }
-    } else {
-        // If the version failed to parse, check if it accepts old arguments
-        let output = Command::new("SvtAv1EncApp")
-            .arg("--cdef-level")
-            .arg("0")
-            .output()
-            .expect("failed to run svt-av1");
-
-        let out = if output.stdout.is_empty() {
-            output.stderr
-        } else {
-            output.stdout
-        };
-        // assume an old version of SVT-AV1 if the version and unprocessed tokens failed
-        // to parse, as the format for v0.9.0+ should be the same
-        parse_svt_av1_unprocessed_tokens(&out).is_none_or(|tokens| tokens.is_empty())
-    }
-});
+static SVT_AV1_OLD_ARG_SUPPORT: Lazy<Mutex<HashMap<String, bool>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static SVT_AV1_QUARTER_STEP_SUPPORT: Lazy<Mutex<HashMap<String, bool>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 use crate::{
     ffmpeg::{compose_ffmpeg_pipe, FFPixelFormat},
@@ -126,30 +101,91 @@ pub(crate) fn parse_svt_av1_unprocessed_tokens(output: &[u8]) -> Option<Vec<Stri
 }
 
 #[tracing::instrument(level = "debug")]
-pub(crate) fn svt_av1_supports_quarter_steps(temp: &str) -> bool {
-    *SVT_AV1_QUARTER_STEP_SUPPORT.get_or_init(|| {
-        use std::{fs, io::Write, path::Path, process::Stdio};
+pub(crate) fn uses_old_svt_av1_args(encoder_bin: &str) -> bool {
+    if let Some(cached) = SVT_AV1_OLD_ARG_SUPPORT
+        .lock()
+        .expect("mutex should acquire lock")
+        .get(encoder_bin)
+        .copied()
+    {
+        return cached;
+    }
 
-        let test_file = Path::new(temp).join("test_q.y4m");
-        let result = (|| -> Option<bool> {
-            let mut f = fs::File::create(&test_file).ok()?;
-            writeln!(f, "YUV4MPEG2 W320 H240 F30:1 Ip A0:0 C420jpeg").ok()?;
-            writeln!(f, "FRAME").ok()?;
-            f.write_all(&vec![0u8; 320 * 240 + 2 * 160 * 120]).ok()?;
-            drop(f);
+    let version = Command::new(encoder_bin)
+        .arg("--version")
+        .output()
+        .expect("failed to run svt-av1");
 
-            Command::new("SvtAv1EncApp")
-                .args(["-i", test_file.to_str()?, "--crf", "50.75", "-b", NULL])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .ok()
-                .map(|s| s.success())
-        })();
+    let is_old = if let Some((major, minor, _)) = parse_svt_av1_version(&version.stdout) {
+        match major {
+            0 => minor < 9,
+            1.. => false,
+        }
+    } else {
+        // If the version failed to parse, check if it accepts old arguments
+        let output = Command::new(encoder_bin)
+            .arg("--cdef-level")
+            .arg("0")
+            .output()
+            .expect("failed to run svt-av1");
 
-        let _ = fs::remove_file(test_file);
-        result.unwrap_or(false)
-    })
+        let out = if output.stdout.is_empty() {
+            output.stderr
+        } else {
+            output.stdout
+        };
+        // assume an old version of SVT-AV1 if the version and unprocessed tokens failed
+        // to parse, as the format for v0.9.0+ should be the same
+        parse_svt_av1_unprocessed_tokens(&out).is_none_or(|tokens| tokens.is_empty())
+    };
+
+    SVT_AV1_OLD_ARG_SUPPORT
+        .lock()
+        .expect("mutex should acquire lock")
+        .insert(encoder_bin.to_owned(), is_old);
+
+    is_old
+}
+
+#[tracing::instrument(level = "debug")]
+pub(crate) fn svt_av1_supports_quarter_steps(temp: &str, encoder_bin: &str) -> bool {
+    if let Some(cached) = SVT_AV1_QUARTER_STEP_SUPPORT
+        .lock()
+        .expect("mutex should acquire lock")
+        .get(encoder_bin)
+        .copied()
+    {
+        return cached;
+    }
+
+    use std::{fs, io::Write, path::Path, process::Stdio};
+
+    let test_file = Path::new(temp).join("test_q.y4m");
+    let result = (|| -> Option<bool> {
+        let mut f = fs::File::create(&test_file).ok()?;
+        writeln!(f, "YUV4MPEG2 W320 H240 F30:1 Ip A0:0 C420jpeg").ok()?;
+        writeln!(f, "FRAME").ok()?;
+        f.write_all(&vec![0u8; 320 * 240 + 2 * 160 * 120]).ok()?;
+        drop(f);
+
+        Command::new(encoder_bin)
+            .args(["-i", test_file.to_str()?, "--crf", "50.75", "-b", NULL])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .ok()
+            .map(|s| s.success())
+    })();
+
+    let _ = fs::remove_file(test_file);
+    let supports = result.unwrap_or(false);
+
+    SVT_AV1_QUARTER_STEP_SUPPORT
+        .lock()
+        .expect("mutex should acquire lock")
+        .insert(encoder_bin.to_owned(), supports);
+
+    supports
 }
 
 pub(crate) fn format_q(q: f32) -> String {
@@ -168,66 +204,98 @@ impl Display for Encoder {
 }
 
 impl Encoder {
+    #[inline]
+    pub fn resolved_bin(self, encoder_path: Option<&str>) -> Cow<'_, str> {
+        encoder_path.map_or_else(|| Cow::Borrowed(self.bin()), Cow::Borrowed)
+    }
+
     /// Composes 1st pass command for 1 pass encoding
     #[inline]
-    pub fn compose_1_1_pass(self, params: Vec<String>, output: String) -> Vec<String> {
+    pub fn compose_1_1_pass(
+        self,
+        params: Vec<String>,
+        output: String,
+        encoder_path: Option<&str>,
+    ) -> Vec<String> {
+        let encoder_bin = self.resolved_bin(encoder_path);
         match self {
-            Self::aom => chain!(into_array!["aomenc", "--passes=1"], params, into_array![
-                "-o", output, "-"
-            ],)
+            Self::aom => chain!(
+                into_array![encoder_bin.as_ref(), "--passes=1"],
+                params,
+                into_array!["-o", output, "-"],
+            )
             .collect(),
-            Self::rav1e => chain!(into_array!["rav1e", "-", "-y"], params, into_array![
-                "--output", output
-            ])
+            Self::rav1e => chain!(
+                into_array![encoder_bin.as_ref(), "-", "-y"],
+                params,
+                into_array!["--output", output]
+            )
             .collect(),
-            Self::vpx => chain!(into_array!["vpxenc", "--passes=1"], params, into_array![
-                "-o", output, "-"
-            ])
+            Self::vpx => chain!(
+                into_array![encoder_bin.as_ref(), "--passes=1"],
+                params,
+                into_array!["-o", output, "-"]
+            )
             .collect(),
             Self::svt_av1 => chain!(
-                into_array!["SvtAv1EncApp", "-i", "stdin", "--progress", "2"],
+                into_array![encoder_bin.as_ref(), "-i", "stdin", "--progress", "2"],
                 params,
                 into_array!["-b", output],
             )
             .collect(),
             Self::x264 => chain!(
-                into_array!["x264", "--stitchable", "--log-level", "error", "--demuxer", "y4m",],
+                into_array![
+                    encoder_bin.as_ref(),
+                    "--stitchable",
+                    "--log-level",
+                    "error",
+                    "--demuxer",
+                    "y4m",
+                ],
                 params,
                 into_array!["-", "-o", output]
             )
             .collect(),
-            Self::x265 => chain!(into_array!["x265", "--y4m"], params, into_array![
-                "--input", "-", "-o", output
-            ])
+            Self::x265 => chain!(
+                into_array![encoder_bin.as_ref(), "--y4m"],
+                params,
+                into_array!["--input", "-", "-o", output]
+            )
             .collect(),
         }
     }
 
     /// Composes 1st pass command for 2 pass encoding
     #[inline]
-    pub fn compose_1_2_pass(self, params: Vec<String>, fpf: &str) -> Vec<String> {
+    pub fn compose_1_2_pass(
+        self,
+        params: Vec<String>,
+        fpf: &str,
+        encoder_path: Option<&str>,
+    ) -> Vec<String> {
+        let encoder_bin = self.resolved_bin(encoder_path);
         match self {
             Self::aom => chain!(
-                into_array!["aomenc", "--passes=2", "--pass=1"],
+                into_array![encoder_bin.as_ref(), "--passes=2", "--pass=1"],
                 params,
                 into_array![format!("--fpf={fpf}.log"), "-o", NULL, "-"],
             )
             .collect(),
             Self::rav1e => chain!(
-                into_array!["rav1e", "-", "-y", "--quiet",],
+                into_array![encoder_bin.as_ref(), "-", "-y", "--quiet",],
                 params,
                 into_array!["--first-pass", format!("{fpf}.stat"), "--output", NULL]
             )
             .collect(),
             Self::vpx => chain!(
-                into_array!["vpxenc", "--passes=2", "--pass=1"],
+                into_array![encoder_bin.as_ref(), "--passes=2", "--pass=1"],
                 params,
                 into_array![format!("--fpf={fpf}.log"), "-o", NULL, "-"],
             )
             .collect(),
             Self::svt_av1 => chain!(
                 into_array![
-                    "SvtAv1EncApp",
+                    encoder_bin.as_ref(),
                     "-i",
                     "stdin",
                     "--progress",
@@ -241,7 +309,7 @@ impl Encoder {
             .collect(),
             Self::x264 => chain!(
                 into_array![
-                    "x264",
+                    encoder_bin.as_ref(),
                     "--stitchable",
                     "--log-level",
                     "error",
@@ -256,7 +324,7 @@ impl Encoder {
             .collect(),
             Self::x265 => chain!(
                 into_array![
-                    "x265",
+                    encoder_bin.as_ref(),
                     "--repeat-headers",
                     "--log-level",
                     "error",
@@ -282,29 +350,36 @@ impl Encoder {
 
     /// Composes 2st pass command for 2 pass encoding
     #[inline]
-    pub fn compose_2_2_pass(self, params: Vec<String>, fpf: &str, output: String) -> Vec<String> {
+    pub fn compose_2_2_pass(
+        self,
+        params: Vec<String>,
+        fpf: &str,
+        output: String,
+        encoder_path: Option<&str>,
+    ) -> Vec<String> {
+        let encoder_bin = self.resolved_bin(encoder_path);
         match self {
             Self::aom => chain!(
-                into_array!["aomenc", "--passes=2", "--pass=2"],
+                into_array![encoder_bin.as_ref(), "--passes=2", "--pass=2"],
                 params,
                 into_array![format!("--fpf={fpf}.log"), "-o", output, "-"],
             )
             .collect(),
             Self::rav1e => chain!(
-                into_array!["rav1e", "-", "-y", "--quiet",],
+                into_array![encoder_bin.as_ref(), "-", "-y", "--quiet",],
                 params,
                 into_array!["--second-pass", format!("{fpf}.stat"), "--output", output]
             )
             .collect(),
             Self::vpx => chain!(
-                into_array!["vpxenc", "--passes=2", "--pass=2"],
+                into_array![encoder_bin.as_ref(), "--passes=2", "--pass=2"],
                 params,
                 into_array![format!("--fpf={fpf}.log"), "-o", output, "-"],
             )
             .collect(),
             Self::svt_av1 => chain!(
                 into_array![
-                    "SvtAv1EncApp",
+                    encoder_bin.as_ref(),
                     "-i",
                     "stdin",
                     "--progress",
@@ -318,7 +393,7 @@ impl Encoder {
             .collect(),
             Self::x264 => chain!(
                 into_array![
-                    "x264",
+                    encoder_bin.as_ref(),
                     "--stitchable",
                     "--log-level",
                     "error",
@@ -333,7 +408,7 @@ impl Encoder {
             .collect(),
             Self::x265 => chain!(
                 into_array![
-                    "x265",
+                    encoder_bin.as_ref(),
                     "--repeat-headers",
                     "--log-level",
                     "error",
@@ -520,14 +595,20 @@ impl Encoder {
     /// Returns help command for encoder
     #[inline]
     pub const fn help_command(self) -> [&'static str; 2] {
+        [self.bin(), self.help_arg()]
+    }
+
+    #[inline]
+    pub const fn help_arg(self) -> &'static str {
         match self {
-            Self::aom => ["aomenc", "--help"],
-            Self::rav1e => ["rav1e", "--help"],
-            Self::vpx => ["vpxenc", "--help"],
-            Self::svt_av1 => ["SvtAv1EncApp", "--help"],
-            Self::x264 => ["x264", "--fullhelp"],
-            Self::x265 => ["x265", "--fullhelp"],
+            Self::aom | Self::rav1e | Self::vpx | Self::svt_av1 => "--help",
+            Self::x264 | Self::x265 => "--fullhelp",
         }
+    }
+
+    #[inline]
+    pub fn help_command_with_bin(self, encoder_path: Option<&str>) -> (Cow<'_, str>, &'static str) {
+        (self.resolved_bin(encoder_path), self.help_arg())
     }
 
     /// Returns version text for encoder, or None if encoder is not available in
@@ -716,10 +797,12 @@ impl Encoder {
         self,
         threads: usize,
         q: f32,
+        encoder_path: Option<&str>,
     ) -> Vec<Cow<'static, str>> {
+        let encoder_bin = self.resolved_bin(encoder_path).into_owned();
         match &self {
             Self::aom => inplace_vec![
-                "aomenc",
+                encoder_bin,
                 "--passes=1",
                 format!("--threads={threads}"),
                 "--tile-columns=2",
@@ -749,7 +832,7 @@ impl Encoder {
                 "--kf-max-dist=9999"
             ],
             Self::rav1e => inplace_vec![
-                "rav1e",
+                encoder_bin,
                 "-y",
                 "-s",
                 MAXIMUM_SPEED_RAV1E.to_string(),
@@ -765,7 +848,7 @@ impl Encoder {
                 "--no-scene-detection",
             ],
             Self::vpx => inplace_vec![
-                "vpxenc",
+                encoder_bin,
                 "-b",
                 "10",
                 "--profile=2",
@@ -781,9 +864,9 @@ impl Encoder {
                 "--kf-max-dist=9999"
             ],
             Self::svt_av1 => {
-                if *USE_OLD_SVT_AV1 {
+                if uses_old_svt_av1_args(&encoder_bin) {
                     inplace_vec![
-                        "SvtAv1EncApp",
+                        encoder_bin,
                         "-i",
                         "stdin",
                         "--lp",
@@ -847,7 +930,7 @@ impl Encoder {
                     ]
                 } else {
                     inplace_vec![
-                        "SvtAv1EncApp",
+                        encoder_bin,
                         "-i",
                         "stdin",
                         "--lp",
@@ -866,7 +949,7 @@ impl Encoder {
                 }
             },
             Self::x264 => inplace_vec![
-                "x264",
+                encoder_bin,
                 "--log-level",
                 "error",
                 "--demuxer",
@@ -881,7 +964,7 @@ impl Encoder {
                 format!("{:.2}", q),
             ],
             Self::x265 => inplace_vec![
-                "x265",
+                encoder_bin,
                 "--log-level",
                 "0",
                 "--no-progress",
@@ -901,16 +984,25 @@ impl Encoder {
     /// Returns command used for target quality probing (slow, correctness
     /// focused version)
     #[inline]
-    pub fn construct_target_quality_command_probe_slow(self, q: f32) -> Vec<Cow<'static, str>> {
+    pub fn construct_target_quality_command_probe_slow(
+        self,
+        q: f32,
+        encoder_path: Option<&str>,
+    ) -> Vec<Cow<'static, str>> {
+        let encoder_bin = self.resolved_bin(encoder_path).into_owned();
         match &self {
             Self::aom => {
-                inplace_vec!["aomenc", "--passes=1", format!("--cq-level={}", q.round() as usize)]
+                inplace_vec![
+                    encoder_bin,
+                    "--passes=1",
+                    format!("--cq-level={}", q.round() as usize)
+                ]
             },
             Self::rav1e => {
-                inplace_vec!["rav1e", "-y", "--quantizer", (q.round() as usize).to_string()]
+                inplace_vec![encoder_bin, "-y", "--quantizer", (q.round() as usize).to_string()]
             },
             Self::vpx => inplace_vec![
-                "vpxenc",
+                encoder_bin,
                 "--passes=1",
                 "--pass=1",
                 "--codec=vp9",
@@ -918,10 +1010,10 @@ impl Encoder {
                 format!("--cq-level={}", q.round() as usize),
             ],
             Self::svt_av1 => {
-                inplace_vec!["SvtAv1EncApp", "-i", "stdin", "--crf", format_q(q),]
+                inplace_vec![encoder_bin, "-i", "stdin", "--crf", format_q(q),]
             },
             Self::x264 => inplace_vec![
-                "x264",
+                encoder_bin,
                 "--log-level",
                 "error",
                 "--demuxer",
@@ -932,7 +1024,7 @@ impl Encoder {
                 format!("{:.2}", q),
             ],
             Self::x265 => inplace_vec![
-                "x265",
+                encoder_bin,
                 "--log-level",
                 "0",
                 "--no-progress",
@@ -972,6 +1064,7 @@ impl Encoder {
         probing_rate: usize,
         vmaf_threads: usize,
         custom_video_params: Option<Vec<String>>,
+        encoder_path: Option<&str>,
     ) -> (Option<Vec<String>>, Vec<Cow<'static, str>>) {
         let filters = if probing_rate > 1 {
             vec![
@@ -998,13 +1091,13 @@ impl Encoder {
         let probe_path = probe.to_string_lossy().to_string();
 
         let params: Vec<Cow<str>> = custom_video_params.map_or_else(
-            || self.construct_target_quality_command(vmaf_threads, q),
+            || self.construct_target_quality_command(vmaf_threads, q, encoder_path),
             |mut video_params| {
                 let quantizer_patterns =
                     ["--cq-level=", "--passes=", "--pass=", "--crf", "--quantizer"];
                 Self::remove_patterns(&mut video_params, &quantizer_patterns);
 
-                let mut ps = self.construct_target_quality_command_probe_slow(q);
+                let mut ps = self.construct_target_quality_command_probe_slow(q, encoder_path);
 
                 ps.reserve(video_params.len());
                 for arg in video_params {

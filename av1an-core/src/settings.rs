@@ -114,6 +114,7 @@ pub struct EncodeArgs {
                                            * later
                                            * for specific encoders */
     pub encoder:              Encoder,
+    pub encoder_path:         Option<String>,
     pub workers:              usize,
     pub set_thread_affinity:  Option<usize>,
     pub photon_noise:         Option<u8>,
@@ -286,10 +287,17 @@ impl EncodeArgs {
             warn!("Target quality with fewer than 4 probes is experimental and not recommended");
         }
 
-        let encoder_bin = self.encoder.bin();
-        if which::which(encoder_bin).is_err() {
+        let encoder_bin = self.encoder.resolved_bin(self.encoder_path.as_deref());
+        if which::which(encoder_bin.as_ref()).is_err() {
+            if let Some(custom_encoder) = &self.encoder_path {
+                bail!(
+                    "Encoder executable '{}' was not found in PATH. Check --encoder-path.",
+                    custom_encoder
+                );
+            }
+
             bail!(
-                "Encoder {} not found. Is it installed in the system path?",
+                "Encoder executable '{}' was not found in PATH. Is it installed?",
                 encoder_bin
             );
         }
@@ -381,8 +389,9 @@ impl EncodeArgs {
             .collect();
 
         let help_text = {
-            let [cmd, arg] = self.encoder.help_command();
-            String::from_utf8_lossy(&Command::new(cmd).arg(arg).output()?.stdout).to_string()
+            let (cmd, arg) = self.encoder.help_command_with_bin(self.encoder_path.as_deref());
+            String::from_utf8_lossy(&Command::new(cmd.as_ref()).arg(arg).output()?.stdout)
+                .to_string()
         };
         let valid_params = valid_params(&help_text, self.encoder);
         let invalid_params = invalid_params(&video_params, &valid_params);

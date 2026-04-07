@@ -3,6 +3,7 @@
 | Name                                                                    | Flag                      | Type           | Default          |
 | ----------------------------------------------------------------------- | ------------------------- | -------------- | ---------------- |
 | [Encoder](#encoder--e---encoder)                                        | `-e`, `--encoder`         | `ENCODER`      | `svt-av1`        |
+| [Encoder Path](#encoder-path---encoder-path)                            | `--encoder-path`          | String         |                  |
 | [Video Parameters](#video-parameters--v---video-params)                 | `-v`, `--video-params`    | String List    | Based on Encoder |
 | [Passes](#passes--p---passes)                                           | `-p`, `--passes`          | Integer        | 1                |
 | [Tile Auto](#tile-auto---tile-auto)                                     | `--tile-auto`             |                |
@@ -37,6 +38,19 @@ Video encoder to use.
 ### Default
 
 If not specified, `svt-av1` will be used.
+
+## Encoder Path `--encoder-path`
+
+Override the encoder executable name or path used for the selected encoder.
+
+This is useful for custom builds or forks with a different executable name, such as `SvtAv1EncApp-SomeFork.exe` or `x265-main12.exe`.
+
+If the executable cannot be found, av1an exits with an error that points to `PATH` and `--encoder-path`.
+
+### Examples
+
+- `> av1an -i input.mkv -o output.mkv -e svt-av1 --encoder-path SvtAv1EncApp-SomeFork.exe` - Uses a custom SVT-AV1 executable from `PATH`
+- `> av1an -i input.mkv -o output.mkv -e x265 --encoder-path x265-main12.exe` - Uses a differently named x265 executable
 
 ## Video Parameters `-v`, `--video-params`
 
@@ -172,6 +186,7 @@ The order in which Av1an will encode chunks.
 - `short-to-long` - The shortest chunks will be encoded first.
 - `sequential` - The chunks will be encoded in the order they appear in the video.
 - `random` - The chunks will be encoded in a random order. This will provide a more accurate estimated filesize sooner in the encode.
+- `long-biased-random` - The chunks will be encoded in a semi-random order with a bias toward longer chunks. It starts from `long-to-short`, randomizes within a sliding window, and tries to keep oversized chunks out of the tail of the queue when possible. For very small queues, it falls back to `random`.
 
 ### Default
 
@@ -181,6 +196,7 @@ If not specified, `long-to-short` is used.
 
 - `> av1an -i input.mkv -o output.mkv --chunk-order short-to-long` - Encodes the shortest chunks first
 - `> av1an -i input.mkv -o output.mkv --chunk-order random` - Encodes the chunks in a random order
+- `> av1an -i input.mkv -o output.mkv --chunk-order long-biased-random` - Encodes chunks in a semi-random order while keeping a bias toward longer chunks
 
 ## Photon Noise `--photon-noise`
 
