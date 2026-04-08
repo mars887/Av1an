@@ -248,6 +248,11 @@ pub struct CliOpts {
     #[clap(short, long)]
     pub keep: bool,
 
+    /// On Ctrl+C, terminate active workers immediately instead of waiting for
+    /// current chunks to finish
+    #[clap(long)]
+    pub fast_interrupt: bool,
+
     /// Do not check if the encoder arguments specified by -v/--video-params are
     /// valid.
     #[clap(long)]
@@ -1216,6 +1221,7 @@ pub fn parse_cli(args: &CliOpts) -> anyhow::Result<Vec<EncodeArgs>> {
             workers: args.workers,
             tiles: (1, 1), // default value; will be adjusted if tile_auto set
             tile_auto: args.tile_auto,
+            fast_interrupt: args.fast_interrupt,
             set_thread_affinity: args.set_thread_affinity,
             zones: args.zones.clone(),
             scaler,

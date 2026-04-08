@@ -29,6 +29,7 @@ use crate::{
         update_mp_msg,
         update_progress_bar_estimates,
     },
+    terminate_active_child_processes,
     util::printable_base10_digits,
     Chunk,
     DoneChunk,
@@ -131,12 +132,23 @@ impl Broker<'_> {
             crossbeam_utils::thread::scope(|s| {
                 let terminations_requested = Arc::new(AtomicU8::new(0));
                 let terminations_requested_clone = Arc::clone(&terminations_requested);
+                let fast_interrupt = self.project.args.fast_interrupt;
                 ctrlc::set_handler(move || {
                     let count = terminations_requested_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                    if count == 1 {
-                        error!("Shutting down. Waiting for current workers to finish...");
+                    let force_shutdown = fast_interrupt || count > 1;
+                    if force_shutdown {
+                        if count == 1 {
+                            error!("Fast shutdown requested. Terminating active workers...");
+                        } else {
+                            error!("Shutting down all workers...");
+                        }
+                        terminate_active_child_processes();
                     } else {
-                        error!("Shutting down all workers...");
+                        error!("Shutting down. Waiting for current workers to finish...");
+                        error!(
+                            "Waiting for current workers to finish. Press Ctrl+C again to terminate \
+                             active workers immediately."
+                        );
                     }
                 })
                 .expect("should set ctrlc handler");
@@ -241,6 +253,12 @@ impl Broker<'_> {
                         break;
                     },
                     Err(e) => {
+                        if terminations_requested.load(Ordering::SeqCst) > 0 {
+                            bail!(
+                                "Termination requested during Target Quality. Skipping chunk {}",
+                                chunk.index
+                            );
+                        }
                         if r#try >= self.project.args.max_tries {
                             bail!(
                                 "Target Quality failed after {} tries on chunk {}:\n{}",
@@ -321,10 +339,9 @@ impl Broker<'_> {
                 if let Err((e, frames)) = res {
                     dec_bar(frames);
 
-                    // If user presses CTRL+C more than once, do not let the worker finish
-                    if terminations_requested.load(Ordering::SeqCst) > 1 {
+                    if terminations_requested.load(Ordering::SeqCst) > 0 {
                         bail!(
-                            "Termination requested after Worker restart. Skipping chunk {}",
+                            "Termination requested after process interruption. Skipping chunk {}",
                             chunk.index
                         );
                     }

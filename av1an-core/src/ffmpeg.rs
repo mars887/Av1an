@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 use vapoursynth::format::PresetFormat;
 
-use crate::{into_array, into_vec, ClipInfo, ColorRange, InputPixelFormat};
+use crate::{into_array, into_vec, spawn_tracked, ClipInfo, ColorRange, InputPixelFormat};
 
 #[inline]
 pub fn compose_ffmpeg_pipe<S: Into<String>>(
@@ -255,10 +255,12 @@ pub fn encode_audio<S: AsRef<OsStr>>(
         encode_audio.args(audio_params);
         encode_audio.arg(&audio_file);
 
-        let output = encode_audio.output()?;
+        let encode_audio_cmd = format!("{encode_audio:?}");
+        let (encode_audio_child, _audio_guard) = spawn_tracked(&mut encode_audio)?;
+        let output = encode_audio_child.wait_with_output()?;
 
         if !output.status.success() {
-            warn!("FFmpeg failed to encode audio!\n{output:#?}\nParams: {encode_audio:?}");
+            warn!("FFmpeg failed to encode audio!\n{output:#?}\nParams: {encode_audio_cmd}");
             return Ok(None);
         }
 

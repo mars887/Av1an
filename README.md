@@ -35,6 +35,7 @@ This fork adds two encoding-specific changes:
 
 - `--encoder-path <EXE>` overrides the executable name or path used for the selected encoder. This is useful for custom builds such as `SvtAv1EncApp-SomeFork.exe`. If the executable cannot be found, av1an exits with a clear `PATH` error.
 - `--chunk-order long-biased-random` adds a semi-random queue that keeps a bias toward longer chunks. It starts from a long-to-short ordering, randomizes within a sliding window, and tries to keep oversized chunks out of the tail of the queue when possible.
+- `--fast-interrupt` changes `Ctrl+C` behavior from graceful shutdown to fast shutdown. Without it, av1an waits for current workers to finish; with it, the first `Ctrl+C` terminates active worker processes immediately.
 
 ### Examples
 

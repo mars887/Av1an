@@ -10,6 +10,7 @@
 | [FFmpeg Parameters](#ffmpeg-filter-arguments--f---ffmpeg)               | `-f`, `--ffmpeg`          | String         |
 | [Audio Parameters](#audio-parameters--a---audio-params)                 | `-a`, `--audio-params`    | String         |
 | [Ignore Frame Mismatch](#ignore-frame-mismatch---ignore-frame-mismatch) | `--ignore-frame-mismatch` |
+| [Fast Interrupt](#fast-interrupt---fast-interrupt)                      | `--fast-interrupt`        |                |
 | [Chunk Method](#chunk-method--m---chunk-method)                         | `-m`, `--chunk-method`    | `CHUNK_METHOD` | `lsmash`         |
 | [Chunk Order](#chunk-order---chunk-order)                               | `--chunk-order`           | `CHUNK_ORDER`  | `long-to-short`  |
 | [Photon Noise](#photon-noise---photon-noise)                            | `--photon-noise`          | Integer        |
@@ -115,6 +116,12 @@ If not specified, `-c:a copy` is used.
 ## Ignore Frame Mismatch `--ignore-frame-mismatch`
 
 Ignore any detected mismatch between scene frame count and encoder frame count
+
+## Fast Interrupt `--fast-interrupt`
+
+Change `Ctrl+C` behavior from graceful shutdown to fast shutdown.
+
+Without this flag, Av1an stops taking new work and waits for currently running workers to finish their chunks. With this flag, the first `Ctrl+C` terminates active worker processes immediately so the program exits faster.
 
 ## Chunk Method `-m`, `--chunk-method`
 

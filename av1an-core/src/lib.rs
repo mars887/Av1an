@@ -1,10 +1,11 @@
 use std::{
     cmp::max,
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fs::{self, read_to_string, File},
     hash::{Hash, Hasher},
     io::Write,
     path::{Path, PathBuf},
+    process::{Child, Command},
     string::ToString,
     sync::{
         atomic::{AtomicBool, AtomicUsize},
@@ -22,7 +23,7 @@ use dashmap::DashMap;
 use once_cell::sync::{Lazy, OnceCell};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString, IntoStaticStr};
-use tracing::info;
+use tracing::{info, warn};
 
 pub use crate::{
     concat::ConcatMethod,
@@ -64,6 +65,7 @@ mod zones;
 
 static CLIP_INFO_CACHE: Lazy<Mutex<HashMap<CacheKey, ClipInfo>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static ACTIVE_CHILD_PROCESSES: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct CacheKey {
@@ -425,6 +427,72 @@ struct DoneJson {
 }
 
 static DONE_JSON: OnceCell<DoneJson> = OnceCell::new();
+
+pub(crate) struct RegisteredChildProcess {
+    pid: u32,
+}
+
+impl Drop for RegisteredChildProcess {
+    fn drop(&mut self) {
+        ACTIVE_CHILD_PROCESSES
+            .lock()
+            .expect("mutex should acquire lock")
+            .remove(&self.pid);
+    }
+}
+
+#[inline]
+pub(crate) fn register_child_process(child: &Child) -> RegisteredChildProcess {
+    let pid = child.id();
+    ACTIVE_CHILD_PROCESSES.lock().expect("mutex should acquire lock").insert(pid);
+    RegisteredChildProcess {
+        pid,
+    }
+}
+
+#[inline]
+pub(crate) fn spawn_tracked(
+    command: &mut Command,
+) -> std::io::Result<(Child, RegisteredChildProcess)> {
+    let child = command.spawn()?;
+    let guard = register_child_process(&child);
+    Ok((child, guard))
+}
+
+pub(crate) fn terminate_active_child_processes() {
+    let pids: Vec<u32> = ACTIVE_CHILD_PROCESSES
+        .lock()
+        .expect("mutex should acquire lock")
+        .iter()
+        .copied()
+        .collect();
+
+    for pid in pids {
+        if let Err(e) = terminate_process_tree(pid) {
+            warn!("Failed to terminate child process {pid}: {e}");
+        }
+    }
+}
+
+fn terminate_process_tree(pid: u32) -> std::io::Result<()> {
+    cfg_if::cfg_if! {
+        if #[cfg(windows)] {
+            let status = Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .status()?;
+        } else {
+            let status = Command::new("kill").args(["-TERM", &pid.to_string()]).status()?;
+        }
+    }
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "process killer exited with status {status}"
+        )))
+    }
+}
 
 // once_cell::sync::Lazy cannot be used here due to Lazy<T> not implementing
 // Serialize or Deserialize, we need to get a reference directly to the global

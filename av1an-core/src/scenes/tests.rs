@@ -69,6 +69,7 @@ fn get_test_args() -> Av1anContext {
         split_method:          SplitMethod::AvScenechange,
         sc_method:             ScenecutMethod::Standard,
         sc_only:               false,
+        fast_interrupt:        false,
         sc_downscale_height:   None,
         force_keyframes:       Vec::new(),
         target_quality:        TargetQuality::default("", Encoder::aom),

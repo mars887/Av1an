@@ -33,10 +33,12 @@ use crate::{
         xpsnr::{read_xpsnr_file, run_xpsnr, XPSNRSubMetric},
     },
     progress_bar::update_mp_msg,
+    spawn_tracked,
     vapoursynth::{measure_butteraugli, measure_ssimulacra2, measure_xpsnr, VapoursynthPlugins},
     Encoder,
     ProbingStatistic,
     ProbingStatisticName,
+    RegisteredChildProcess,
     TargetMetric,
     VmafFeature,
 };
@@ -562,41 +564,45 @@ impl TargetQuality {
         let (ff_cmd, output) = cmd.clone();
 
         thread::scope(move |scope| -> Result<(), Box<EncoderCrash>> {
-            let mut source = if let [pipe_cmd, args @ ..] = &*source_cmd {
-                std::process::Command::new(pipe_cmd)
-                    .args(args)
-                    .stderr(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .spawn()
-                    .map_err(|e| EncoderCrash {
-                        exit_status:        std::process::ExitStatus::default(),
-                        source_pipe_stderr: format!("Failed to spawn source: {e}").into(),
-                        ffmpeg_pipe_stderr: None,
-                        stderr:             String::new().into(),
-                        stdout:             String::new().into(),
-                    })?
+            let (mut source, _source_guard) = if let [pipe_cmd, args @ ..] = &*source_cmd {
+                let mut command = std::process::Command::new(pipe_cmd);
+                spawn_tracked(
+                    command
+                        .args(args)
+                        .stderr(std::process::Stdio::piped())
+                        .stdout(std::process::Stdio::piped()),
+                )
+                .map_err(|e| EncoderCrash {
+                    exit_status:        std::process::ExitStatus::default(),
+                    source_pipe_stderr: format!("Failed to spawn source: {e}").into(),
+                    ffmpeg_pipe_stderr: None,
+                    stderr:             String::new().into(),
+                    stdout:             String::new().into(),
+                })?
             } else {
                 unreachable!()
             };
 
             let source_stdout = source.stdout.take().expect("source stdout should exist");
 
-            let (mut source_pipe, mut enc_pipe) = {
+            let (mut source_pipe, _source_pipe_guard, mut enc_pipe, _enc_guard) = {
                 if let Some(ff_cmd) = ff_cmd.as_deref() {
                     let (ffmpeg, args) = ff_cmd.split_first().expect("not empty");
-                    let mut source_pipe = std::process::Command::new(ffmpeg)
-                        .args(args)
-                        .stdin(source_stdout)
-                        .stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::piped())
-                        .spawn()
-                        .map_err(|e| EncoderCrash {
-                            exit_status:        std::process::ExitStatus::default(),
-                            source_pipe_stderr: format!("Failed to spawn ffmpeg: {e}").into(),
-                            ffmpeg_pipe_stderr: None,
-                            stderr:             String::new().into(),
-                            stdout:             String::new().into(),
-                        })?;
+                    let mut command = std::process::Command::new(ffmpeg);
+                    let (mut source_pipe, source_pipe_guard) = spawn_tracked(
+                        command
+                            .args(args)
+                            .stdin(source_stdout)
+                            .stdout(std::process::Stdio::piped())
+                            .stderr(std::process::Stdio::piped()),
+                    )
+                    .map_err(|e| EncoderCrash {
+                        exit_status:        std::process::ExitStatus::default(),
+                        source_pipe_stderr: format!("Failed to spawn ffmpeg: {e}").into(),
+                        ffmpeg_pipe_stderr: None,
+                        stderr:             String::new().into(),
+                        stdout:             String::new().into(),
+                    })?;
 
                     let source_pipe_stdout =
                         source_pipe.stdout.take().expect("source_pipe stdout should exist");
@@ -606,7 +612,12 @@ impl TargetQuality {
                     } else {
                         unreachable!()
                     };
-                    (Some(source_pipe), enc_pipe)
+                    (
+                        Some(source_pipe),
+                        Some(source_pipe_guard),
+                        enc_pipe.0,
+                        Some(enc_pipe.1),
+                    )
                 } else {
                     // We unfortunately have to duplicate the code like this
                     // in order to satisfy the borrow checker for `source_stdout`
@@ -615,7 +626,7 @@ impl TargetQuality {
                     } else {
                         unreachable!()
                     };
-                    (None, enc_pipe)
+                    (None, None, enc_pipe.0, Some(enc_pipe.1))
                 }
             };
 
@@ -898,20 +909,22 @@ fn build_encoder_pipe(
     cmd: &str,
     args: &[Cow<'_, str>],
     in_pipe: impl Into<Stdio>,
-) -> Result<Child, EncoderCrash> {
-    std::process::Command::new(cmd)
-        .args(args.iter().map(AsRef::as_ref))
-        .stdin(in_pipe)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| EncoderCrash {
-            exit_status:        std::process::ExitStatus::default(),
-            source_pipe_stderr: String::new().into(),
-            ffmpeg_pipe_stderr: None,
-            stderr:             format!("Failed to spawn encoder: {e}").into(),
-            stdout:             String::new().into(),
-        })
+) -> Result<(Child, RegisteredChildProcess), EncoderCrash> {
+    let mut command = std::process::Command::new(cmd);
+    spawn_tracked(
+        command
+            .args(args.iter().map(AsRef::as_ref))
+            .stdin(in_pipe)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .map_err(|e| EncoderCrash {
+        exit_status:        std::process::ExitStatus::default(),
+        source_pipe_stderr: String::new().into(),
+        ffmpeg_pipe_stderr: None,
+        stderr:             format!("Failed to spawn encoder: {e}").into(),
+        stdout:             String::new().into(),
+    })
 }
 
 fn predict_quantizer(

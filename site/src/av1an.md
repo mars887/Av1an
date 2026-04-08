@@ -63,6 +63,7 @@ Name | Flag | Type | Default
 [FFmpeg Parameters](./Cli/encoding.md#ffmpeg-filter-arguments--f---ffmpeg) | `-f`, `--ffmpeg` | String |
 [Audio Parameters](./Cli/encoding.md#audio-parameters--a---audio-params) | `-a`, `--audio-params` | String |
 [Ignore Frame Mismatch](./Cli/encoding.md#ignore-frame-mismatch---ignore-frame-mismatch) | `--ignore-frame-mismatch` | 
+[Fast Interrupt](./Cli/encoding.md#fast-interrupt---fast-interrupt) | `--fast-interrupt` |
 [Chunk Method](./Cli/encoding.md#chunk-method--m---chunk-method) | `-m`, `--chunk-method` | `CHUNK_METHOD` | `lsmash`
 [Chunk Order](./Cli/encoding.md#chunk-order---chunk-order) | `--chunk-order` | `CHUNK_ORDER` | `long-to-short`
 [Photon Noise](./Cli/encoding.md#photon-noise---photon-noise) | `--photon-noise` | Integer |

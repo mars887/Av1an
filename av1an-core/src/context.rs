@@ -53,6 +53,7 @@ use crate::{
     save_chunk_queue,
     scenes::{Scene, SceneFactory, ZoneOptions},
     settings::{EncodeArgs, InputPixelFormat},
+    spawn_tracked,
     split::segment,
     vapoursynth::{create_vs_file, LoadscriptArgs},
     zones::{parse_zones, validate_zones},
@@ -632,65 +633,63 @@ impl Av1anContext {
         let (source_pipe_stderr, ffmpeg_pipe_stderr, enc_output, enc_stderr, frame) =
             thread::scope(|scope| -> Result<_, (anyhow::Error, u64)> {
                 let mut use_vs_resize_converter = false;
-                let mut source_pipe = if let [source, args @ ..] = &*chunk.source_cmd {
-                    let mut command = Command::new(source);
+                let (mut source_pipe, _source_guard) =
+                    if let [source, args @ ..] = &*chunk.source_cmd {
+                        let mut command = Command::new(source);
 
-                    for arg in chunk.input.as_vspipe_args_vec().map_err(|e| (e, 0))? {
-                        command.args(["-a", &arg]);
-                    }
-
-                    command.args(args);
-                    if self.args.ffmpeg_filter_args.is_empty() {
-                        match &self.args.input_pix_format {
-                            InputPixelFormat::FFmpeg {
-                                format,
-                            } => {
-                                if self.args.output_pix_format.format != *format
-                                    && self.args.pix_format_converter
-                                        == PixelFormatConverter::VsResize
-                                    && self.args.input.is_video()
-                                {
-                                    command.env(
-                                        "AV1AN_PIXEL_FORMAT",
-                                        self.args
-                                            .output_pix_format
-                                            .format
-                                            .to_vapoursynth_string()
-                                            .map_err(|e| (e, 0))?,
-                                    );
-                                    use_vs_resize_converter = true;
-                                }
-                            },
-                            InputPixelFormat::VapourSynth {
-                                bit_depth,
-                            } => {
-                                if self.args.output_pix_format.bit_depth != *bit_depth
-                                    && self.args.pix_format_converter
-                                        == PixelFormatConverter::VsResize
-                                    && self.args.input.is_video()
-                                {
-                                    command.env(
-                                        "AV1AN_PIXEL_FORMAT",
-                                        self.args
-                                            .output_pix_format
-                                            .format
-                                            .to_vapoursynth_string()
-                                            .map_err(|e| (e, 0))?,
-                                    );
-                                    use_vs_resize_converter = true;
-                                }
-                            },
+                        for arg in chunk.input.as_vspipe_args_vec().map_err(|e| (e, 0))? {
+                            command.args(["-a", &arg]);
                         }
-                    }
 
-                    command
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .spawn()
-                        .map_err(|e| (e.into(), 0))?
-                } else {
-                    unreachable!()
-                };
+                        command.args(args);
+                        if self.args.ffmpeg_filter_args.is_empty() {
+                            match &self.args.input_pix_format {
+                                InputPixelFormat::FFmpeg {
+                                    format,
+                                } => {
+                                    if self.args.output_pix_format.format != *format
+                                        && self.args.pix_format_converter
+                                            == PixelFormatConverter::VsResize
+                                        && self.args.input.is_video()
+                                    {
+                                        command.env(
+                                            "AV1AN_PIXEL_FORMAT",
+                                            self.args
+                                                .output_pix_format
+                                                .format
+                                                .to_vapoursynth_string()
+                                                .map_err(|e| (e, 0))?,
+                                        );
+                                        use_vs_resize_converter = true;
+                                    }
+                                },
+                                InputPixelFormat::VapourSynth {
+                                    bit_depth,
+                                } => {
+                                    if self.args.output_pix_format.bit_depth != *bit_depth
+                                        && self.args.pix_format_converter
+                                            == PixelFormatConverter::VsResize
+                                        && self.args.input.is_video()
+                                    {
+                                        command.env(
+                                            "AV1AN_PIXEL_FORMAT",
+                                            self.args
+                                                .output_pix_format
+                                                .format
+                                                .to_vapoursynth_string()
+                                                .map_err(|e| (e, 0))?,
+                                        );
+                                        use_vs_resize_converter = true;
+                                    }
+                                },
+                            }
+                        }
+
+                        spawn_tracked(command.stdout(Stdio::piped()).stderr(Stdio::piped()))
+                            .map_err(|e| (e.into(), 0))?
+                    } else {
+                        unreachable!()
+                    };
 
                 let source_pipe_stdout: Stdio =
                     source_pipe.stdout.take().expect("source_pipe should have stdout").into();
@@ -704,14 +703,17 @@ impl Av1anContext {
                         self.args.output_pix_format.format,
                     );
 
-                    let mut ffmpeg_pipe = if let [ffmpeg, args @ ..] = &*ffmpeg_pipe {
-                        Command::new(ffmpeg)
-                            .args(args)
-                            .stdin(pipe_from)
-                            .stdout(Stdio::piped())
-                            .stderr(Stdio::piped())
-                            .spawn()
-                            .map_err(|e| (e.into(), 0))?
+                    let (mut ffmpeg_pipe, ffmpeg_guard) = if let [ffmpeg, args @ ..] = &*ffmpeg_pipe
+                    {
+                        let mut command = Command::new(ffmpeg);
+                        spawn_tracked(
+                            command
+                                .args(args)
+                                .stdin(pipe_from)
+                                .stdout(Stdio::piped())
+                                .stderr(Stdio::piped()),
+                        )
+                        .map_err(|e| (e.into(), 0))?
                     } else {
                         unreachable!()
                     };
@@ -724,10 +726,11 @@ impl Av1anContext {
                         ffmpeg_pipe_stdout,
                         source_pipe_stderr,
                         Some(ffmpeg_pipe_stderr),
+                        Some(ffmpeg_guard),
                     ))
                 };
 
-                let (y4m_pipe, source_pipe_stderr, mut ffmpeg_pipe_stderr) =
+                let (y4m_pipe, source_pipe_stderr, mut ffmpeg_pipe_stderr, _ffmpeg_guard) =
                     if self.args.ffmpeg_filter_args.is_empty() {
                         match &self.args.input_pix_format {
                             InputPixelFormat::FFmpeg {
@@ -736,7 +739,7 @@ impl Av1anContext {
                                 if use_vs_resize_converter
                                     || self.args.output_pix_format.format == *format
                                 {
-                                    (source_pipe_stdout, source_pipe_stderr, None)
+                                    (source_pipe_stdout, source_pipe_stderr, None, None)
                                 } else {
                                     create_ffmpeg_pipe(source_pipe_stdout, source_pipe_stderr)?
                                 }
@@ -747,7 +750,7 @@ impl Av1anContext {
                                 if use_vs_resize_converter
                                     || self.args.output_pix_format.bit_depth == *bit_depth
                                 {
-                                    (source_pipe_stdout, source_pipe_stderr, None)
+                                    (source_pipe_stdout, source_pipe_stderr, None, None)
                                 } else {
                                     create_ffmpeg_pipe(source_pipe_stdout, source_pipe_stderr)?
                                 }
@@ -771,8 +774,11 @@ impl Av1anContext {
 
                 scope.spawn(move || {
                     for line in source_reader.lines() {
+                        let Ok(line) = line else {
+                            break;
+                        };
                         let mut lock = p_stdr2.lock().expect("mutex should acquire lock");
-                        lock.push_str(&line.expect("should read line successfully"));
+                        lock.push_str(&line);
                         lock.push('\n');
                     }
                 });
@@ -780,21 +786,26 @@ impl Av1anContext {
                     let f_stdr2 = f_stdr2.expect("f_stdr2 should exist if ffmpeg_reader exists");
                     scope.spawn(move || {
                         for line in ffmpeg_reader.lines() {
+                            let Ok(line) = line else {
+                                break;
+                            };
                             let mut lock = f_stdr2.lock().expect("mutex should acquire lock");
-                            lock.push_str(&line.expect("should read line successfully"));
+                            lock.push_str(&line);
                             lock.push('\n');
                         }
                     });
                 }
 
-                let mut enc_pipe = if let [encoder, args @ ..] = &*enc_cmd {
-                    Command::new(encoder)
-                        .args(args)
-                        .stdin(y4m_pipe)
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .spawn()
-                        .map_err(|e| (e.into(), 0))?
+                let (mut enc_pipe, _enc_guard) = if let [encoder, args @ ..] = &*enc_cmd {
+                    let mut command = Command::new(encoder);
+                    spawn_tracked(
+                        command
+                            .args(args)
+                            .stdin(y4m_pipe)
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::piped()),
+                    )
+                    .map_err(|e| (e.into(), 0))?
                 } else {
                     unreachable!()
                 };
