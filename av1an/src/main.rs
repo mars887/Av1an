@@ -56,6 +56,8 @@ fn main() -> anyhow::Result<()> {
 // needs to be static, runtime allocated string to avoid evil hacks to
 // concatenate non-trivial strings at compile-time
 fn version() -> &'static str {
+    const FORK_INFO: &str = "Fork from: https://github.com/mars887/Av1an.git";
+
     fn get_vs_info() -> String {
         let vapoursynth_plugins = get_vapoursynth_plugins()
             .map_err(|e| warn!("Failed to detect VapourSynth plugins: {}", e))
@@ -141,6 +143,8 @@ fn version() -> &'static str {
 
 {}
 
+{}
+
 {}",
                     env!("CARGO_PKG_VERSION"),
                     git_hash,
@@ -153,6 +157,7 @@ fn version() -> &'static str {
                     llvm_ver,
                     target_triple,
                     commit_date,
+                    FORK_INFO,
                     get_vs_info(),
                     get_encoder_info()
                 )
@@ -163,9 +168,12 @@ fn version() -> &'static str {
 
 {}
 
+{}
+
 {}",
                 // only include the semver on a release (when git information isn't available)
                 env!("CARGO_PKG_VERSION"),
+                FORK_INFO,
                 get_vs_info(),
                 get_encoder_info()
             ),
