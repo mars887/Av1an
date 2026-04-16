@@ -64,6 +64,8 @@ Name | Flag | Type | Default
 [Audio Parameters](./Cli/encoding.md#audio-parameters--a---audio-params) | `-a`, `--audio-params` | String |
 [Ignore Frame Mismatch](./Cli/encoding.md#ignore-frame-mismatch---ignore-frame-mismatch) | `--ignore-frame-mismatch` | 
 [Fast Interrupt](./Cli/encoding.md#fast-interrupt---fast-interrupt) | `--fast-interrupt` |
+[Progress JSONL](./Cli/encoding.md#progress-jsonl---progress-jsonl) | `--progress-jsonl` | Path |
+[Progress JSONL Delay](./Cli/encoding.md#progress-jsonl-delay---progress-jsonl-delay) | `--progress-jsonl-delay` | Float | `1.0`
 [Chunk Method](./Cli/encoding.md#chunk-method--m---chunk-method) | `-m`, `--chunk-method` | `CHUNK_METHOD` | `lsmash`
 [Chunk Order](./Cli/encoding.md#chunk-order---chunk-order) | `--chunk-order` | `CHUNK_ORDER` | `long-to-short`
 [Photon Noise](./Cli/encoding.md#photon-noise---photon-noise) | `--photon-noise` | Integer |

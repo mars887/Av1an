@@ -130,13 +130,15 @@ pub struct EncodeArgs {
     pub input_pix_format:   InputPixelFormat,
     pub output_pix_format:  PixelFormat,
 
-    pub verbosity:      Verbosity,
-    pub resume:         bool,
-    pub keep:           bool,
-    pub fast_interrupt: bool,
-    pub force:          bool,
-    pub no_defaults:    bool,
-    pub tile_auto:      bool,
+    pub verbosity:            Verbosity,
+    pub resume:               bool,
+    pub keep:                 bool,
+    pub fast_interrupt:       bool,
+    pub progress_jsonl:       Option<PathBuf>,
+    pub progress_jsonl_delay: f64,
+    pub force:                bool,
+    pub no_defaults:          bool,
+    pub tile_auto:            bool,
 
     pub concat:         ConcatMethod,
     pub target_quality: TargetQuality,
@@ -163,6 +165,10 @@ impl EncodeArgs {
         }
 
         ensure!(self.max_tries > 0);
+        ensure!(
+            self.progress_jsonl_delay.is_finite() && self.progress_jsonl_delay > 0.0,
+            "--progress-jsonl-delay must be a finite positive number of seconds"
+        );
 
         ensure!(
             self.input.as_path().exists(),

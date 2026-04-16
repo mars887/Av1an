@@ -39,9 +39,11 @@ use crate::{
     progress_bar::{
         finish_progress_bar,
         inc_bar,
+        inc_jsonl_progress,
         inc_mp_bar,
         init_multi_progress_bar,
         init_progress_bar,
+        init_progress_jsonl,
         reset_bar_at,
         reset_mp_bar_at,
         set_audio_size,
@@ -399,6 +401,23 @@ impl Av1anContext {
                 self.args.workers = determine_workers(&self.args)? as usize;
             }
             self.args.workers = cmp::min(self.args.workers, chunk_queue.len());
+
+            if let Some(progress_jsonl) = &self.args.progress_jsonl {
+                init_progress_jsonl(
+                    progress_jsonl,
+                    self.args.progress_jsonl_delay,
+                    fps,
+                    self.frames,
+                    initial_frames as u64,
+                    (chunks_done as u32, total_chunks as u32),
+                )
+                .with_context(|| {
+                    format!(
+                        "Failed to create progress JSONL file {}",
+                        progress_jsonl.display()
+                    )
+                })?;
+            }
 
             info!(
                 "\n{}{} {} {}{} {} {}{} {} {}{} {}\n{}: {}",
@@ -840,6 +859,8 @@ impl Av1anContext {
                                 inc_bar(new - frame);
                             } else if self.args.verbosity == Verbosity::Verbose {
                                 inc_mp_bar(new - frame);
+                            } else if self.args.progress_jsonl.is_some() {
+                                inc_jsonl_progress(new - frame);
                             }
                             frame = new;
                         }

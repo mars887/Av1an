@@ -261,6 +261,17 @@ pub struct CliOpts {
     #[clap(long)]
     pub fast_interrupt: bool,
 
+    /// Write machine-readable progress events as JSON Lines to this file
+    ///
+    /// Each line is a JSON object with event, timestamp, frame progress,
+    /// speed, ETA, estimated bitrate, and completed chunk counts.
+    #[clap(long, value_name = "PATH")]
+    pub progress_jsonl: Option<PathBuf>,
+
+    /// Minimum delay between JSONL progress updates, in seconds
+    #[clap(long, default_value_t = 1.0, value_name = "SECONDS")]
+    pub progress_jsonl_delay: f64,
+
     /// Do not check if the encoder arguments specified by -v/--video-params are
     /// valid.
     #[clap(long)]
@@ -1230,6 +1241,8 @@ pub fn parse_cli(args: &CliOpts) -> anyhow::Result<Vec<EncodeArgs>> {
             tiles: (1, 1), // default value; will be adjusted if tile_auto set
             tile_auto: args.tile_auto,
             fast_interrupt: args.fast_interrupt,
+            progress_jsonl: args.progress_jsonl.clone(),
+            progress_jsonl_delay: args.progress_jsonl_delay,
             set_thread_affinity: args.set_thread_affinity,
             zones: args.zones.clone(),
             scaler,

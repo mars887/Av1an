@@ -11,6 +11,8 @@
 | [Audio Parameters](#audio-parameters--a---audio-params)                 | `-a`, `--audio-params`    | String         |
 | [Ignore Frame Mismatch](#ignore-frame-mismatch---ignore-frame-mismatch) | `--ignore-frame-mismatch` |
 | [Fast Interrupt](#fast-interrupt---fast-interrupt)                      | `--fast-interrupt`        |                |
+| [Progress JSONL](#progress-jsonl---progress-jsonl)                      | `--progress-jsonl`        | Path           |
+| [Progress JSONL Delay](#progress-jsonl-delay---progress-jsonl-delay)    | `--progress-jsonl-delay`  | Float          | `1.0`            |
 | [Chunk Method](#chunk-method--m---chunk-method)                         | `-m`, `--chunk-method`    | `CHUNK_METHOD` | `lsmash`         |
 | [Chunk Order](#chunk-order---chunk-order)                               | `--chunk-order`           | `CHUNK_ORDER`  | `long-to-short`  |
 | [Photon Noise](#photon-noise---photon-noise)                            | `--photon-noise`          | Integer        |
@@ -122,6 +124,29 @@ Ignore any detected mismatch between scene frame count and encoder frame count
 Change `Ctrl+C` behavior from graceful shutdown to fast shutdown.
 
 Without this flag, Av1an stops taking new work and waits for currently running workers to finish their chunks. With this flag, the first `Ctrl+C` terminates active worker processes immediately so the program exits faster.
+
+## Progress JSONL `--progress-jsonl`
+
+Write machine-readable progress events as JSON Lines to the specified file.
+
+Each line is a standalone JSON object:
+
+```json
+{"event":"progress","ts":1710000000.0,"percent":39.0,"pos":28115,"total":72469,"fps":11.89,"eta":"62m","kbps":1624.3,"chunks_done":127,"chunks_total":343}
+```
+
+The file is created or truncated when encoding starts. This is useful for wrappers that launch Av1an through `subprocess` and need stable progress data instead of parsing the terminal progress bar.
+
+### Examples
+
+- `> av1an -i input.mkv -o output.mkv --progress-jsonl progress.jsonl` - Writes progress events to `progress.jsonl`
+- `> av1an -i input.mkv -o output.mkv --progress-jsonl progress.jsonl --progress-jsonl-delay 2` - Writes progress events at most once every two seconds
+
+## Progress JSONL Delay `--progress-jsonl-delay`
+
+Minimum delay between JSONL progress updates, in seconds.
+
+This option only affects `--progress-jsonl`. The default is `1.0`.
 
 ## Chunk Method `-m`, `--chunk-method`
 

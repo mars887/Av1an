@@ -31,11 +31,12 @@ For a complete reference, refer to our [documentation](https://rust-av.github.io
 
 ## Fork Additions
 
-This fork adds two encoding-specific changes:
+This fork adds several encoding-specific changes:
 
 - `--encoder-path <EXE>` overrides the executable name or path used for the selected encoder. This is useful for custom builds such as `SvtAv1EncApp-SomeFork.exe`. If the executable cannot be found, av1an exits with a clear `PATH` error.
 - `--chunk-order long-biased-random` adds a semi-random queue that keeps a bias toward longer chunks. It starts from a long-to-short ordering, randomizes within a sliding window, and tries to keep oversized chunks out of the tail of the queue when possible.
 - `--fast-interrupt` changes `Ctrl+C` behavior from graceful shutdown to fast shutdown. Without it, av1an waits for current workers to finish; with it, the first `Ctrl+C` terminates active worker processes immediately.
+- `--progress-jsonl <PATH>` writes machine-readable progress events as JSON Lines. Use `--progress-jsonl-delay <SECONDS>` to control the minimum delay between updates.
 
 ### Examples
 
@@ -61,6 +62,12 @@ Use the new chunk ordering mode:
 
 ```sh
 av1an -i input.mkv -o output.mkv --chunk-order long-biased-random
+```
+
+Write progress to a JSONL file for subprocess wrappers:
+
+```sh
+av1an -i input.mkv -o output.mkv --progress-jsonl progress.jsonl --progress-jsonl-delay 2
 ```
 
 ## Supported encoders

@@ -70,6 +70,8 @@ fn get_test_args() -> Av1anContext {
         sc_method:             ScenecutMethod::Standard,
         sc_only:               false,
         fast_interrupt:        false,
+        progress_jsonl:        None,
+        progress_jsonl_delay:  1.0,
         sc_downscale_height:   None,
         force_keyframes:       Vec::new(),
         target_quality:        TargetQuality::default("", Encoder::aom),
