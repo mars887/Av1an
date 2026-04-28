@@ -478,6 +478,7 @@ impl Av1anContext {
             // chunk crashed) more than MAX_TRIES. So, we have to explicitly
             // exit the program if that happens.
             if rx.recv().is_ok() {
+                finish_progress_bar();
                 exit(1);
             }
 

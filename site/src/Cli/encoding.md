@@ -132,10 +132,12 @@ Write machine-readable progress events as JSON Lines to the specified file.
 Each line is a standalone JSON object:
 
 ```json
-{"event":"progress","ts":1710000000.0,"percent":39.0,"pos":28115,"total":72469,"fps":11.89,"eta":"62m","kbps":1624.3,"chunks_done":127,"chunks_total":343}
+{"event":"progress","ts":1710000000.0,"percent":39.0,"pos":28115,"total":72469,"fps":11.89,"eta":"62m","kbps":1624.3,"est_size":"1.42 GiB","est_size_bytes":1524713390,"elapsed":"39m 42s","chunks_done":127,"chunks_total":343}
 ```
 
 The file is created or truncated when encoding starts. This is useful for wrappers that launch Av1an through `subprocess` and need stable progress data instead of parsing the terminal progress bar.
+
+The first progress event is written immediately when encoding starts, and the final progress event is written immediately when encoding finishes. Intermediate events are limited by `--progress-jsonl-delay`.
 
 ### Examples
 
@@ -146,7 +148,7 @@ The file is created or truncated when encoding starts. This is useful for wrappe
 
 Minimum delay between JSONL progress updates, in seconds.
 
-This option only affects `--progress-jsonl`. The default is `1.0`.
+This option only affects intermediate `--progress-jsonl` updates. The default is `1.0`.
 
 ## Chunk Method `-m`, `--chunk-method`
 

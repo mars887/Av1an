@@ -40,31 +40,35 @@ static AUDIO_BYTES: OnceCell<u64> = OnceCell::new();
 static PROGRESS_JSONL: Lazy<Mutex<Option<ProgressJsonl>>> = Lazy::new(|| Mutex::new(None));
 
 struct ProgressJsonl {
-    file:          File,
-    delay:         Duration,
-    last_emit:     Option<Instant>,
-    start:         Instant,
-    total_frames:  usize,
-    resume_frames: u64,
-    chunks_total:  u32,
-    pos:           u64,
-    kbps:          f64,
-    failed:        bool,
-    finished:      bool,
+    file:           File,
+    delay:          Duration,
+    last_emit:      Option<Instant>,
+    start:          Instant,
+    total_frames:   usize,
+    resume_frames:  u64,
+    chunks_total:   u32,
+    pos:            u64,
+    kbps:           f64,
+    est_size_bytes: Option<u64>,
+    failed:         bool,
+    finished:       bool,
 }
 
 #[derive(Serialize)]
 struct ProgressJsonlEvent {
-    event:        &'static str,
-    ts:           f64,
-    percent:      f64,
-    pos:          u64,
-    total:        u64,
-    fps:          f64,
-    eta:          String,
-    kbps:         f64,
-    chunks_done:  u32,
-    chunks_total: u32,
+    event:          &'static str,
+    ts:             f64,
+    percent:        f64,
+    pos:            u64,
+    total:          u64,
+    fps:            f64,
+    eta:            String,
+    kbps:           f64,
+    est_size:       Option<String>,
+    est_size_bytes: Option<u64>,
+    elapsed:        String,
+    chunks_done:    u32,
+    chunks_total:   u32,
 }
 
 fn round_to(value: f64, places: i32) -> f64 {
@@ -133,6 +137,9 @@ impl ProgressJsonl {
             fps: round_to(fps, 2),
             eta: format_eta(remaining, fps),
             kbps: round_to(self.kbps, 1),
+            est_size: self.est_size_bytes.map(|bytes| HumanBytes(bytes).to_string()),
+            est_size_bytes: self.est_size_bytes,
+            elapsed: format!("{:#}", HumanDuration(self.start.elapsed())),
             chunks_done: get_done().done.len() as u32,
             chunks_total: self.chunks_total,
         };
@@ -170,6 +177,7 @@ pub fn init_progress_jsonl(
         chunks_total: chunks.1,
         pos: resume_frames,
         kbps: 0.0,
+        est_size_bytes: None,
         failed: false,
         finished: false,
     };
@@ -204,9 +212,15 @@ fn dec_progress_jsonl(dec: u64) {
     }
 }
 
-fn update_progress_jsonl_estimates(completed_frames: usize, kbps: f64, force: bool) {
+fn update_progress_jsonl_estimates(
+    completed_frames: usize,
+    kbps: f64,
+    est_size_bytes: u64,
+    force: bool,
+) {
     if let Some(jsonl) = PROGRESS_JSONL.lock().expect("mutex should acquire lock").as_mut() {
         jsonl.kbps = kbps;
+        jsonl.est_size_bytes = Some(est_size_bytes);
         jsonl.pos = jsonl.pos.max(completed_frames as u64);
         jsonl.emit(force);
     }
@@ -527,5 +541,5 @@ pub fn update_progress_bar_estimates(
         update_mp_bar_info(kbps, HumanBytes(est_size as u64), chunks);
     }
 
-    update_progress_jsonl_estimates(completed_frames, kbps, false);
+    update_progress_jsonl_estimates(completed_frames, kbps, est_size as u64, false);
 }
