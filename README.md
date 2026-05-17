@@ -37,6 +37,30 @@ This fork adds several encoding-specific changes:
 - `--chunk-order long-biased-random` adds a semi-random queue that keeps a bias toward longer chunks. It starts from a long-to-short ordering, randomizes within a sliding window, and tries to keep oversized chunks out of the tail of the queue when possible.
 - `--fast-interrupt` changes `Ctrl+C` behavior from graceful shutdown to fast shutdown. Without it, av1an waits for current workers to finish; with it, the first `Ctrl+C` terminates active worker processes immediately.
 - `--progress-jsonl <PATH>` writes machine-readable progress events as JSON Lines. Use `--progress-jsonl-delay <SECONDS>` to control the minimum delay between updates. The first and final events are always written immediately.
+- `--source-workers`, `--encoder-workers`, `--raw-spool-limit`, `--raw-spool-min-free-ram`, `--raw-spool-dir`, and `--use-disk-cache` add a source/encoder decoupled mode for one-pass encodes.
+
+### Source/encoder decoupled mode
+
+Normally each av1an worker keeps one source process and one encoder process tied together for the whole chunk. With VapourSynth input, this means a VSPipe process cannot move to the next chunk until its paired encoder exits, even if VSPipe has already produced every frame for the current chunk.
+
+Source/encoder decoupled mode splits that work into source workers and encoder workers. A source worker starts VSPipe or FFmpeg for a chunk, reads the Y4M stream, and writes frames into a bounded raw-frame spool. As soon as the stream header and frames are available, a free encoder worker can start consuming that stream. If the source finishes first, it can move to another chunk while the encoder drains the remaining buffered frames. The queue is frame-based, so encoders do not need to wait for a whole chunk to be produced before starting.
+
+This is intended for one-pass encoding from prepared scenes, especially heavy `.vpy` scripts where only one VSPipe instance fits in RAM or VRAM:
+
+```sh
+av1an -i input.vpy --scenes scenes.json -o output.mkv --passes 1 --source-workers 1 --encoder-workers 3 --raw-spool-limit 30G --raw-spool-min-free-ram 10G --use-disk-cache false
+```
+
+Parameters:
+
+- `--source-workers <N>` controls how many source processes may run at once. Use `1` when only one VSPipe instance fits in memory or VRAM.
+- `--encoder-workers <N>` controls how many encoder processes may consume produced frame streams. If omitted while decoupled mode is enabled, it defaults to the normal `--workers` value.
+- `--raw-spool-limit <SIZE>` limits the total raw frame spool size. The default is `4G`. Sizes accept `K`, `M`, `G`, `T`, plus `KiB`, `MiB`, `GiB`, and `TiB`.
+- `--raw-spool-min-free-ram <SIZE>` prevents buffering more raw frames in RAM unless at least this much system RAM remains free. `0` disables this guard.
+- `--use-disk-cache true|false` controls whether av1an may spill raw frames to disk when RAM buffering is blocked. The default is `false`, which avoids raw disk cache writes and makes source workers wait for spool space instead.
+- `--raw-spool-dir <PATH>` selects the directory for raw frame spill files when `--use-disk-cache true`. By default, av1an uses `<temp>/raw-spool`.
+
+Current limitations: this mode supports only `--passes 1`, and it does not currently support Target Quality probing.
 
 ### Examples
 
