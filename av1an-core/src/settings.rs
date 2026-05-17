@@ -107,22 +107,28 @@ pub struct EncodeArgs {
 
     pub max_tries: usize,
 
-    pub passes:               u8,
-    pub video_params:         Vec<String>,
-    pub tiles:                (u32, u32), /* tile (cols, rows) count; log2 will be
-                                           * applied
-                                           * later
-                                           * for specific encoders */
-    pub encoder:              Encoder,
-    pub encoder_path:         Option<String>,
-    pub workers:              usize,
-    pub set_thread_affinity:  Option<usize>,
-    pub photon_noise:         Option<u8>,
-    pub photon_noise_size:    (Option<u32>, Option<u32>), // Width and Height
-    pub chroma_noise:         bool,
-    pub zones:                Option<PathBuf>,
-    pub cache_mode:           CacheSource,
-    pub pix_format_converter: PixelFormatConverter,
+    pub passes:                 u8,
+    pub video_params:           Vec<String>,
+    pub tiles:                  (u32, u32), /* tile (cols, rows) count; log2 will be
+                                             * applied
+                                             * later
+                                             * for specific encoders */
+    pub encoder:                Encoder,
+    pub encoder_path:           Option<String>,
+    pub workers:                usize,
+    pub source_workers:         usize,
+    pub encoder_workers:        usize,
+    pub raw_spool_dir:          Option<PathBuf>,
+    pub raw_spool_limit:        u64,
+    pub raw_spool_min_free_ram: u64,
+    pub use_disk_cache:         bool,
+    pub set_thread_affinity:    Option<usize>,
+    pub photon_noise:           Option<u8>,
+    pub photon_noise_size:      (Option<u32>, Option<u32>), // Width and Height
+    pub chroma_noise:           bool,
+    pub zones:                  Option<PathBuf>,
+    pub cache_mode:             CacheSource,
+    pub pix_format_converter:   PixelFormatConverter,
 
     // FFmpeg params
     pub ffmpeg_filter_args: Vec<String>,
@@ -153,6 +159,11 @@ pub struct EncodeArgs {
 }
 
 impl EncodeArgs {
+    #[inline]
+    pub const fn decoupled_encoding_enabled(&self) -> bool {
+        self.source_workers > 0 || self.encoder_workers > 0
+    }
+
     #[inline]
     pub fn validate(&mut self) -> anyhow::Result<()> {
         if self.concat == ConcatMethod::Ivf
@@ -292,6 +303,23 @@ impl EncodeArgs {
 
         if self.target_quality.probes < 4 {
             warn!("Target quality with fewer than 4 probes is experimental and not recommended");
+        }
+
+        if self.decoupled_encoding_enabled() {
+            ensure!(
+                self.passes == 1,
+                "source/encoder decoupled mode currently supports only one-pass encoding. Specify \
+                 --passes 1."
+            );
+            ensure!(
+                self.target_quality.target.is_none(),
+                "source/encoder decoupled mode does not currently support target quality probing"
+            );
+            ensure!(
+                self.raw_spool_limit > 0,
+                "--raw-spool-limit must be greater than 0 when source/encoder decoupled mode is \
+                 enabled"
+            );
         }
 
         let encoder_bin = self.encoder.resolved_bin(self.encoder_path.as_deref());

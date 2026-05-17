@@ -32,7 +32,7 @@ use av1an_core::{
     Verbosity,
     VmafFeature,
 };
-use clap::{value_parser, CommandFactory, Parser};
+use clap::{value_parser, ArgAction, CommandFactory, Parser};
 use clap_complete::generate;
 use num_traits::cast::ToPrimitive;
 use once_cell::sync::OnceCell;
@@ -296,6 +296,45 @@ pub struct CliOpts {
     /// Number of workers to spawn [0 = automatic]
     #[clap(short, long, default_value_t = 0)]
     pub workers: usize,
+
+    /// Number of source/VSPipe workers for source/encoder decoupled mode
+    ///
+    /// Setting this or --encoder-workers enables the decoupled pipeline. Use 1
+    /// when only one VSPipe instance fits in memory or VRAM.
+    #[clap(long, default_value_t = 0, help_heading = "Encoding")]
+    pub source_workers: usize,
+
+    /// Number of encoder workers for source/encoder decoupled mode
+    ///
+    /// If omitted while --source-workers is set, this defaults to --workers or
+    /// 1 when --workers is automatic.
+    #[clap(long, default_value_t = 0, help_heading = "Encoding")]
+    pub encoder_workers: usize,
+
+    /// Directory used for raw frame spill files when --use-disk-cache true
+    ///
+    /// Defaults to <temp>/raw-spool.
+    #[clap(long, value_name = "PATH", help_heading = "Encoding")]
+    pub raw_spool_dir: Option<PathBuf>,
+
+    /// Maximum total raw frame buffer size for source/encoder decoupled mode
+    ///
+    /// Accepts suffixes K, M, G, T and KiB, MiB, GiB, TiB.
+    #[clap(long, default_value = "4G", value_parser = parse_byte_size, help_heading = "Encoding")]
+    pub raw_spool_limit: u64,
+
+    /// Keep at least this much system RAM free before buffering more raw frames
+    ///
+    /// Accepts suffixes K, M, G, T and KiB, MiB, GiB, TiB. 0 disables this
+    /// guard.
+    #[clap(long, default_value = "0", value_parser = parse_byte_size, help_heading = "Encoding")]
+    pub raw_spool_min_free_ram: u64,
+
+    /// Allow raw frame buffer spill files on disk
+    ///
+    /// When false, Av1an blocks VSPipe once the RAM buffer limits are reached.
+    #[clap(long, default_value_t = false, action = ArgAction::Set, help_heading = "Encoding")]
+    pub use_disk_cache: bool,
 
     /// Pin each worker to a specific set of threads of this size (disabled by
     /// default)
@@ -960,6 +999,46 @@ fn confirm(prompt: &str) -> io::Result<bool> {
     }
 }
 
+fn parse_byte_size(value: &str) -> Result<u64, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("size must not be empty".to_string());
+    }
+
+    let number_end = trimmed
+        .find(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .unwrap_or(trimmed.len());
+    let (number, suffix) = trimmed.split_at(number_end);
+    if number.is_empty() {
+        return Err(format!("invalid size {value:?}"));
+    }
+
+    let number: f64 = number.parse().map_err(|_| format!("invalid size number {number:?}"))?;
+    if !number.is_finite() || number < 0.0 {
+        return Err(format!("invalid size number {number:?}"));
+    }
+
+    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1_f64,
+        "k" | "kb" => 1_000_f64,
+        "m" | "mb" => 1_000_000_f64,
+        "g" | "gb" => 1_000_000_000_f64,
+        "t" | "tb" => 1_000_000_000_000_f64,
+        "ki" | "kib" => 1024_f64,
+        "mi" | "mib" => 1024_f64.powi(2),
+        "gi" | "gib" => 1024_f64.powi(3),
+        "ti" | "tib" => 1024_f64.powi(4),
+        suffix => return Err(format!("unknown size suffix {suffix:?}")),
+    };
+
+    let bytes = number * multiplier;
+    if bytes > u64::MAX as f64 {
+        return Err(format!("size {value:?} is too large"));
+    }
+
+    Ok(bytes.round() as u64)
+}
+
 /// Given Folder and File path as inputs
 /// Converts them all to file paths
 /// Converting only depth 1 of Folder paths
@@ -1172,6 +1251,12 @@ pub fn parse_cli(args: &CliOpts) -> anyhow::Result<Vec<EncodeArgs>> {
             concat: args.concat,
             encoder: args.encoder,
             encoder_path: args.encoder_path.clone(),
+            source_workers: args.source_workers,
+            encoder_workers: args.encoder_workers,
+            raw_spool_dir: args.raw_spool_dir.clone(),
+            raw_spool_limit: args.raw_spool_limit,
+            raw_spool_min_free_ram: args.raw_spool_min_free_ram,
+            use_disk_cache: args.use_disk_cache,
             extra_splits_len: match args.extra_split {
                 Some(0) => None,
                 Some(x) => Some(x),

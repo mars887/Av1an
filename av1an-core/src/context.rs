@@ -401,6 +401,16 @@ impl Av1anContext {
                 self.args.workers = determine_workers(&self.args)? as usize;
             }
             self.args.workers = cmp::min(self.args.workers, chunk_queue.len());
+            if self.args.decoupled_encoding_enabled() {
+                if self.args.source_workers == 0 {
+                    self.args.source_workers = 1;
+                }
+                if self.args.encoder_workers == 0 {
+                    self.args.encoder_workers = self.args.workers.max(1);
+                }
+                self.args.source_workers = cmp::min(self.args.source_workers, chunk_queue.len());
+                self.args.encoder_workers = cmp::min(self.args.encoder_workers, chunk_queue.len());
+            }
 
             if let Some(progress_jsonl) = &self.args.progress_jsonl {
                 init_progress_jsonl(
@@ -426,7 +436,17 @@ impl Av1anContext {
                 format!("{len}", len = chunk_queue.len()).green().bold(),
                 "W".blue().bold(),
                 "orkers".blue(),
-                format!("{workers}", workers = self.args.workers).blue().bold(),
+                if self.args.decoupled_encoding_enabled() {
+                    format!(
+                        "{source}+{encoder}",
+                        source = self.args.source_workers,
+                        encoder = self.args.encoder_workers
+                    )
+                    .blue()
+                    .bold()
+                } else {
+                    format!("{workers}", workers = self.args.workers).blue().bold()
+                },
                 "E".purple().bold(),
                 "ncoder".purple(),
                 format!("{encoder}", encoder = self.args.encoder).purple().bold(),
@@ -447,7 +467,11 @@ impl Av1anContext {
             } else if self.args.verbosity == Verbosity::Verbose {
                 init_multi_progress_bar(
                     self.frames as u64,
-                    self.args.workers,
+                    if self.args.decoupled_encoding_enabled() {
+                        self.args.source_workers + self.args.encoder_workers
+                    } else {
+                        self.args.workers
+                    },
                     initial_frames as u64,
                     (chunks_done as u32, total_chunks as u32),
                 );
